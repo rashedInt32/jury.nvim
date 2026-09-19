@@ -2,6 +2,10 @@
 
 Calibrated picks for Neovim, judged by [TypeSafe Jev](https://docs.typesafe.ai).
 
+![Jev picks the fix and says how sure it is](docs/jev-confident.png)
+
+![Below the threshold, the generic hint stays and the lean is shown](docs/jev-unsure.png)
+
 Code enumerates the candidates. Jev picks one and says how sure it is. A
 threshold decides whether you see the pick. Judgments are prefetched when
 diagnostics change and cached by hash, so nothing on the hover path waits.
