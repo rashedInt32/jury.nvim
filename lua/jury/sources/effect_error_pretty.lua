@@ -65,7 +65,8 @@ function M.collect(bufnr)
         family, names = pretty().hint_family(parsed)
       end
       if family then
-        local context = Context.enclosing(bufnr, d.lnum)
+        local ctx = Context.describe(bufnr, d.lnum)
+        local context = ctx.text
         local layer = parsed.tag == "layer"
         items[#items + 1] = {
           kind = "hint",
@@ -79,6 +80,8 @@ function M.collect(bufnr)
             holder = layer and "layer" or "effect",
             missing = names,
             diagnostic = truncate(d.message, 800),
+            file = ctx.file,
+            exported = ctx.exported,
             context = context,
           },
         }
