@@ -60,6 +60,7 @@ write(ws .. "/app.ts", table.concat({
   "export const handler = (id: number): Effect.Effect<string, never, Database> =>",
   "  Effect.gen(function* () { const db = yield* Database; return `user: ${yield* db.find(id)}` })",
   "Effect.runFork(Effect.forkScoped(job))",
+  "export const GreeterLive: Layer.Layer<Greeter, never, never> = Layer.effect(Greeter, make)",
 }, "\n") .. "\n")
 vim.cmd.cd(ws)
 
@@ -112,6 +113,7 @@ local diags = {
   { lnum = 3, col = 2, severity = 1, source = "typescript", code = 2375, message = "Type 'Effect<string, NotFound, Database>' is not assignable to type 'Effect<string, never, Database>'" .. SUFFIX },
   { lnum = 5, col = 2, severity = 1, source = "effect", code = 1, message = "Missing 'NotFound' in the expected Effect errors." },
   { lnum = 6, col = 0, severity = 1, source = "typescript", code = 2769, message = NO_OVERLOAD },
+  { lnum = 7, col = 13, severity = 1, source = "effect", code = 1, message = "Missing 'Logger' in the expected Layer context." },
 }
 
 local function box(i)
@@ -156,10 +158,14 @@ it("one batch judges every family, dedupes the duplicate line, and steers the ov
     return b and b:find("⚡ Jev:", 1, true) ~= nil and box(5):find("Type Mismatch", 1, true) ~= nil
   end, 20)
   eq(#requests, 1, "one request for the whole buffer")
-  -- 4 hint diagnostics collapse to 3 signatures (line 1 twice), plus the overload.
-  eq(#requests[1].state.items, 4)
+  -- 5 hint diagnostics collapse to 4 signatures (line 1 twice), plus the overload.
+  eq(#requests[1].state.items, 5)
   local qcount = vim.tbl_count(requests[1].questions)
-  eq(qcount, 2 + 2 + 2 + 1, "layer+where, fix+domain, fix+domain, overload")
+  eq(qcount, 2 + 2 + 2 + 1 + 1, "layer+where, fix+domain, fix+domain, overload, layer only")
+  has(box(6), "Missing RIn")
+  has(box(6), "⚡ Jev: Layer.provide(AppLive) inside this layer", "a Layer's RIn gets the layer template, no where question")
+  has(box(6), "↳ layer AppLive 0.97")
+  lacks(box(6), "Layer.merge")
   has(box(1), "⚡ Jev: .pipe(Effect.provide(AppLive))")
   has(box(1), "↳ layer AppLive 0.97 · where here 0.80")
   has(box(2), "⚡ Jev: .pipe(Effect.provide(AppLive))", "duplicate diagnostic shares the answer")

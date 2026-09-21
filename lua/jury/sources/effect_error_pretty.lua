@@ -66,13 +66,21 @@ function M.collect(bufnr)
       end
       if family then
         local context = Context.enclosing(bufnr, d.lnum)
+        local layer = parsed.tag == "layer"
         items[#items + 1] = {
           kind = "hint",
           family = family,
           names = names,
+          layer = layer,
           key = hint_key(d, context),
-          sig = ("hint:%d:%s:%s:%s"):format(d.lnum, family, table.concat(names, "|"), vim.fn.sha256(context):sub(1, 8)),
-          state = { family = family, missing = names, diagnostic = truncate(d.message, 800), context = context },
+          sig = ("hint:%d:%s:%s:%s:%s"):format(d.lnum, family, layer and "layer" or "effect", table.concat(names, "|"), vim.fn.sha256(context):sub(1, 8)),
+          state = {
+            family = family,
+            holder = layer and "layer" or "effect",
+            missing = names,
+            diagnostic = truncate(d.message, 800),
+            context = context,
+          },
         }
       end
       local candidates = parse().candidate_reports(d.message)
@@ -154,6 +162,14 @@ function M.questions(item, id, shared)
     if #shared.layers == 0 then
       return nil
     end
+    if item.layer then
+      -- A Layer's RIn has one placement: Layer.provide inside that layer.
+      q[id .. "_layer"] = Client.choice({
+        task = ("For %s: this Layer still requires %s in its RIn. Which listed layer should it be composed with, through Layer.provide, to satisfy that requirement? Prefer a layer that constructs exactly these services."):format(ref, names),
+        note = UNTRUSTED,
+      }, layer_options(shared.layers))
+      return q
+    end
     q[id .. "_layer"] = Client.choice({
       task = ("For %s: the Effect is missing the services %s. Which listed layer should be provided to satisfy them? Prefer a layer that constructs exactly these services, or composes them."):format(ref, names),
       note = UNTRUSTED,
@@ -200,8 +216,14 @@ function M.finish(item, id, answers, _)
   end
   if item.family == "services" then
     local layer, conf = pick(answers, id, "_layer")
-    local where, wconf = pick(answers, id, "_where")
     local name = Candidates.name(layer)
+    if item.layer then
+      if not name or conf < min then
+        return { confidence = conf, lean = ("%s unsure: layer %s %.2f"):format(Config.options.label:lower(), name or "none", conf) }
+      end
+      return { confidence = conf, line = templates.provide(name, item.names, "layer"), detail = ("layer %s %.2f"):format(name, conf) }
+    end
+    local where, wconf = pick(answers, id, "_where")
     if not name or conf < min then
       return { confidence = conf, lean = ("%s unsure: layer %s %.2f · where %s %.2f"):format(Config.options.label:lower(), name or "none", conf, where or "?", wconf) }
     end
