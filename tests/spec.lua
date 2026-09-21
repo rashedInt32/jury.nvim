@@ -166,6 +166,10 @@ it("one batch judges every family, dedupes the duplicate line, and steers the ov
   has(box(6), "⚡ Jev: Layer.provide(AppLive) inside this layer", "a Layer's RIn gets the layer template, no where question")
   has(box(6), "↳ layer AppLive 0.97")
   lacks(box(6), "Layer.merge")
+  local first = requests[1].state.items[1]
+  eq(first.file, "app.ts", "relative file path travels with the item")
+  eq(first.exported, true, "`export const main` is exported")
+  eq(first.holder, "effect")
   has(box(1), "⚡ Jev: .pipe(Effect.provide(AppLive))")
   has(box(1), "↳ layer AppLive 0.97 · where here 0.80")
   has(box(2), "⚡ Jev: .pipe(Effect.provide(AppLive))", "duplicate diagnostic shares the answer")
@@ -228,6 +232,18 @@ it("the DiagnosticChanged loop judges on its own after a debounce", function()
     return #requests >= 1
   end, 20)
   eq(#requests, 1)
+end)
+
+it("docs/scope.md names every parsed kind effect-error-pretty knows", function()
+  local parse_src = table.concat(vim.fn.readfile(vim.g.jury_test_pretty .. "/lua/effect-error-pretty/parse.lua"), "\n")
+  local scope = table.concat(vim.fn.readfile(root .. "/docs/scope.md"), "\n")
+  local missing = {}
+  for kind in parse_src:gmatch('kind = "([%w_]+)"') do
+    if not scope:find("`" .. kind .. "`", 1, true) then
+      missing[#missing + 1] = kind
+    end
+  end
+  eq(missing, {}, "kinds without a scope decision")
 end)
 
 it("status reports the source and the last batch", function()
