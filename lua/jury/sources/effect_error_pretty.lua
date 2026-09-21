@@ -81,18 +81,55 @@ local function definitions_spec(names)
   }
 end
 
+-- Each option is the criterion Jev judges against plus the one-line reason
+-- shown under a concrete hint. The reason is the criterion's own "right
+-- when" clause, so what the box says is exactly what was judged.
 local FIX_OPTIONS = {
-  declare = "Add the error to this function's declared error type and let the caller handle it. Right when this function is an inner step whose caller is better placed to decide.",
-  catch_tag = "Handle it here with Effect.catchTag (or catchTags) and continue with a fallback value. Right when a sensible default exists at this point.",
-  or_die = "Treat it as a defect with Effect.orDie. Right at the program boundary, in scripts, tests, or when the error cannot happen in practice.",
-  map_error = "Wrap it into a domain error with Effect.mapError so the caller sees one error type. Right at a service or module boundary.",
+  declare = {
+    text = "Add the error to this function's declared error type and let the caller handle it. Right when this function is an inner step whose caller is better placed to decide.",
+    why = "an inner step; its caller is better placed to decide",
+  },
+  catch_tag = {
+    text = "Handle it here with Effect.catchTag (or catchTags) and continue with a fallback value. Right when a sensible default exists at this point.",
+    why = "a sensible fallback exists right here",
+  },
+  or_die = {
+    text = "Treat it as a defect with Effect.orDie. Right at the program boundary, in scripts, tests, or when the error cannot happen in practice.",
+    why = "a program boundary, script or test; the error is a defect here",
+  },
+  map_error = {
+    text = "Wrap it into a domain error with Effect.mapError so the caller sees one error type. Right at a service or module boundary.",
+    why = "a service or module boundary; the caller should see one error type",
+  },
 }
 
 local WHERE_OPTIONS = {
-  here = "This expression is itself the program boundary (runPromise, runMain, runSync, a request handler, a test) or otherwise the right place for the requirement to end: provide right here with .pipe(Effect.provide(...)).",
-  caller = "This is an inner function; leave the requirement in R and let a caller higher up provide it.",
-  layer = "This is inside a Layer definition; the dependency belongs in Layer.provide of that layer.",
+  here = {
+    text = "This expression is itself the program boundary (runPromise, runMain, runSync, a request handler, a test) or otherwise the right place for the requirement to end: provide right here with .pipe(Effect.provide(...)).",
+    why = "this expression is the program boundary",
+  },
+  caller = {
+    text = "This is an inner function; leave the requirement in R and let a caller higher up provide it.",
+    why = "an inner function; a caller higher up should provide it",
+  },
+  layer = {
+    text = "This is inside a Layer definition; the dependency belongs in Layer.provide of that layer.",
+    why = "inside a Layer definition",
+  },
 }
+
+local function criteria_of(options)
+  local out = {}
+  for k, v in pairs(options) do
+    out[k] = v.text
+  end
+  return out
+end
+
+local function why_of(options, key, fallback)
+  local o = key and options[key]
+  return o and o.why or fallback
+end
 
 local function pretty()
   return require("effect-error-pretty")
@@ -294,7 +331,7 @@ function M.questions(item, id, shared)
     q[id .. "_where"] = Client.choice({
       task = ("For %s: where should %s be provided, judging from its `context`?"):format(ref, names),
       note = UNTRUSTED,
-    }, WHERE_OPTIONS)
+    }, criteria_of(WHERE_OPTIONS))
   elseif item.family == "widened" then
     local options = definition_options(shared.definitions or {}, item)
     if not options then
@@ -308,7 +345,7 @@ function M.questions(item, id, shared)
     q[id .. "_fix"] = Client.choice({
       task = ("For %s: the Effect can fail with %s, which its declared or expected error type does not include. Which fix does the surrounding `context` call for?"):format(ref, names),
       note = UNTRUSTED,
-    }, FIX_OPTIONS)
+    }, criteria_of(FIX_OPTIONS))
     if #shared.errors > 0 then
       q[id .. "_domain"] = Client.choice({
         task = ("For %s, premise: the fix is to wrap %s into a domain error with Effect.mapError. Which listed error class is the right target?"):format(ref, names),
@@ -347,7 +384,11 @@ function M.finish(item, id, answers, shared)
       if not name or conf < min then
         return { confidence = conf, lean = ("%s unsure: layer %s %.2f"):format(Config.options.label:lower(), name or "none", conf) }
       end
-      return { confidence = conf, line = templates.provide(name, item.names, "layer"), detail = ("layer %s %.2f"):format(name, conf) }
+      return {
+        confidence = conf,
+        line = templates.provide(name, item.names, "layer"),
+        detail = ("a Layer's RIn is satisfied inside it · %.2f"):format(conf),
+      }
     end
     local where, wconf = pick(answers, id, "_where")
     if not name or conf < min then
@@ -357,7 +398,7 @@ function M.finish(item, id, answers, shared)
     return {
       confidence = conf,
       line = templates.provide(name, item.names, placement),
-      detail = ("layer %s %.2f · where %s %.2f"):format(name, conf, where or "?", wconf),
+      detail = ("%s · %.2f"):format(why_of(WHERE_OPTIONS, placement, "provided here"), conf),
     }
   end
   if item.family == "widened" then
@@ -369,7 +410,8 @@ function M.finish(item, id, answers, shared)
     return {
       confidence = conf,
       line = templates.widened(item.names[1], def.name, def.file, def.line),
-      detail = ("widened %s %.2f"):format(def.name, conf),
+      -- The definition's own line is the reason: it shows the cast or `any`.
+      detail = ("%s · %.2f"):format(truncate(def.text, 72), conf),
     }
   end
   if item.family == "errors" then
@@ -380,7 +422,7 @@ function M.finish(item, id, answers, shared)
       return { confidence = conf, lean = ("%s unsure: fix %s %.2f · mapError target %s %.2f"):format(Config.options.label:lower(), fix or "none", conf, target or "none", dconf) }
     end
     local line = templates.unhandled(fix, item.names, (dconf >= min) and target or nil)
-    return { confidence = conf, line = line, detail = ("fix %s %.2f"):format(fix, conf) }
+    return { confidence = conf, line = line, detail = ("%s · %.2f"):format(why_of(FIX_OPTIONS, fix, fix), conf) }
   end
   return {}
 end
