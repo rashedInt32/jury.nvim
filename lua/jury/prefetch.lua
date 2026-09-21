@@ -88,6 +88,10 @@ function M.judge_buffer(bufnr)
           item.keys = { item.key }
           seen[item.sig] = item
           items[#items + 1] = item
+          -- In flight from this moment, not after the async state step:
+          -- a debounced judge that fires during the workspace scan must
+          -- not send this batch a second time.
+          state.inflight[item.key] = true
         end
       end
     end
@@ -103,7 +107,10 @@ function M.run(source, bufnr, items)
       local questions, batch, count = {}, {}, 0
       for i, item in ipairs(items) do
         local id = "d" .. i
-        local ok, q = pcall(source.questions, item, id, shared)
+        local ok, q = false, nil
+        if count < 60 then
+          ok, q = pcall(source.questions, item, id, shared)
+        end
         if ok and q and next(q) then
           item.id = id
           batch[#batch + 1] = item
@@ -111,12 +118,11 @@ function M.run(source, bufnr, items)
             questions[k] = v
             count = count + 1
           end
+        else
+          -- Nothing to ask, or the batch is full: release the reservation.
           for _, key in ipairs(item.keys) do
-            state.inflight[key] = true
+            state.inflight[key] = nil
           end
-        end
-        if count >= 60 then
-          break
         end
       end
       if #batch == 0 then

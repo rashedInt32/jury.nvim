@@ -60,6 +60,10 @@ write(ws .. "/app.ts", table.concat({
   "export const handler = (id: number): Effect.Effect<string, never, Database> =>",
   "  Effect.gen(function* () { const db = yield* Database; return `user: ${yield* db.find(id)}` })",
   "Effect.runFork(Effect.forkScoped(job))",
+  "export const GreeterLive: Layer.Layer<Greeter, never, never> = Layer.effect(Greeter, make)",
+  "const registry: Record<string, unknown> = {}",
+  "const fromRegistry = (k: string) => registry[k] as Effect.Effect<string, never, unknown>",
+  "export const runRegistered = Effect.runPromise(Effect.gen(function* () { return yield* fromRegistry(\"home\") }))",
 }, "\n") .. "\n")
 vim.cmd.cd(ws)
 
@@ -112,6 +116,8 @@ local diags = {
   { lnum = 3, col = 2, severity = 1, source = "typescript", code = 2375, message = "Type 'Effect<string, NotFound, Database>' is not assignable to type 'Effect<string, never, Database>'" .. SUFFIX },
   { lnum = 5, col = 2, severity = 1, source = "effect", code = 1, message = "Missing 'NotFound' in the expected Effect errors." },
   { lnum = 6, col = 0, severity = 1, source = "typescript", code = 2769, message = NO_OVERLOAD },
+  { lnum = 7, col = 13, severity = 1, source = "effect", code = 1, message = "Missing 'Logger' in the expected Layer context." },
+  { lnum = 10, col = 47, severity = 1, source = "typescript", code = 2379, message = "Argument of type 'Effect<string, never, unknown>' is not assignable to parameter of type 'Effect<string, never, never>'" .. SUFFIX },
 }
 
 local function box(i)
@@ -139,6 +145,8 @@ it("before any judgment the boxes render the generic hints", function()
   vim.diagnostic.set(ns, buf, diags)
   has(box(1), "⚡ Hint: .pipe(Effect.provide(SomeLayer))")
   has(box(3), "⚡ Hint: .pipe(Effect.catchTags({...})) or Effect.orDie")
+  has(box(7), "R Not Inferred")
+  has(box(7), "⚡ Hint: annotate the effect to find where R widened")
 end)
 
 it("one batch judges every family, dedupes the duplicate line, and steers the overload parse", function()
@@ -148,6 +156,7 @@ it("one batch judges every family, dedupes the duplicate line, and steers the ov
     fix = { choice = "declare", confidence = 0.92 },
     domain = { choice = "UserServiceError@errors.ts", confidence = 0.95 },
     overload = { choice = "2", confidence = 0.9 },
+    widened = { choice = "fromRegistry@app.ts", confidence = 0.81 },
   }
   requests = {}
   jury.judge(buf)
@@ -156,17 +165,52 @@ it("one batch judges every family, dedupes the duplicate line, and steers the ov
     return b and b:find("⚡ Jev:", 1, true) ~= nil and box(5):find("Type Mismatch", 1, true) ~= nil
   end, 20)
   eq(#requests, 1, "one request for the whole buffer")
-  -- 4 hint diagnostics collapse to 3 signatures (line 1 twice), plus the overload.
-  eq(#requests[1].state.items, 4)
+  -- 6 hint diagnostics collapse to 5 signatures (line 1 twice), plus the overload.
+  eq(#requests[1].state.items, 6)
   local qcount = vim.tbl_count(requests[1].questions)
-  eq(qcount, 2 + 2 + 2 + 1, "layer+where, fix+domain, fix+domain, overload")
+  eq(qcount, 2 + 2 + 2 + 1 + 1 + 1, "layer+where, fix+domain, fix+domain, overload, layer only, widened")
+  local wide = requests[1].state.items[6]
+  eq(wide.family, "widened")
+  eq(wide.channel, "R")
+  truthy(vim.tbl_contains(wide.suspects, "fromRegistry"), "the helper is a suspect")
+  truthy(not vim.tbl_contains(wide.suspects, "Effect"), "the Effect namespace is not a suspect")
+  local wq = requests[1].questions["d6_widened"]
+  truthy(wq and wq.criteria["fromRegistry@app.ts"], "options are the suspects' workspace definitions")
+  truthy(wq and wq.criteria["runRegistered@app.ts"])
+  truthy(wq and not wq.criteria["registry@app.ts"], "definitions the context never mentions are not offered")
+  truthy(wq and not wq.criteria["main@app.ts"])
+  has(box(7), "⚡ Jev: annotate fromRegistry (app.ts:10), where R widened")
+  has(box(7), "↳ const fromRegistry = (k: string) => registry[k] as Effect.Effect<string,", "the definition's own line is the reason")
+  has(box(7), "… · 0.81")
+  lacks(box(7), "annotate the effect to find where")
+  has(box(6), "Missing RIn")
+  has(box(6), "⚡ Jev: Layer.provide(AppLive) inside this layer", "a Layer's RIn gets the layer template, no where question")
+  has(box(6), "↳ a Layer's RIn is satisfied inside it · 0.97")
+  lacks(box(6), "Layer.merge")
+  local first = requests[1].state.items[1]
+  eq(first.file, "app.ts", "relative file path travels with the item")
+  eq(first.exported, true, "`export const main` is exported")
+  eq(first.holder, "effect")
   has(box(1), "⚡ Jev: .pipe(Effect.provide(AppLive))")
-  has(box(1), "↳ layer AppLive 0.97 · where here 0.80")
+  has(box(1), "↳ this expression is the program boundary · 0.97", "the detail line is the chosen option's own reason")
   has(box(2), "⚡ Jev: .pipe(Effect.provide(AppLive))", "duplicate diagnostic shares the answer")
   has(box(3), "⚡ Jev: declare NotFound in this function's E channel; let the caller handle it")
+  has(box(3), "↳ an inner step; its caller is better placed to decide · 0.92")
   has(box(4), "⚡ Jev: declare NotFound")
   has(box(5), "Type Mismatch", "overload picker steered the parse to report 2")
   lacks(box(1), "SomeLayer")
+end)
+
+it("two judges during one workspace scan send one request", function()
+  jury.clear()
+  requests = {}
+  jury.judge(buf) -- starts the async candidate scan
+  jury.judge(buf) -- fires while that scan is still running
+  vim.wait(5000, function()
+    return #requests >= 1 and vim.tbl_count(Prefetch._state().inflight) == 0
+  end, 20)
+  vim.wait(200)
+  eq(#requests, 1, "the second judge must see the first batch in flight")
 end)
 
 it("a re-judge sends nothing when everything is cached", function()
@@ -210,6 +254,18 @@ it("the DiagnosticChanged loop judges on its own after a debounce", function()
     return #requests >= 1
   end, 20)
   eq(#requests, 1)
+end)
+
+it("docs/scope.md names every parsed kind effect-error-pretty knows", function()
+  local parse_src = table.concat(vim.fn.readfile(vim.g.jury_test_pretty .. "/lua/effect-error-pretty/parse.lua"), "\n")
+  local scope = table.concat(vim.fn.readfile(root .. "/docs/scope.md"), "\n")
+  local missing = {}
+  for kind in parse_src:gmatch('kind = "([%w_]+)"') do
+    if not scope:find("`" .. kind .. "`", 1, true) then
+      missing[#missing + 1] = kind
+    end
+  end
+  eq(missing, {}, "kinds without a scope decision")
 end)
 
 it("status reports the source and the last batch", function()
