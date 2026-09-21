@@ -169,6 +169,18 @@ it("one batch judges every family, dedupes the duplicate line, and steers the ov
   lacks(box(1), "SomeLayer")
 end)
 
+it("two judges during one workspace scan send one request", function()
+  jury.clear()
+  requests = {}
+  jury.judge(buf) -- starts the async candidate scan
+  jury.judge(buf) -- fires while that scan is still running
+  vim.wait(5000, function()
+    return #requests >= 1 and vim.tbl_count(Prefetch._state().inflight) == 0
+  end, 20)
+  vim.wait(200)
+  eq(#requests, 1, "the second judge must see the first batch in flight")
+end)
+
 it("a re-judge sends nothing when everything is cached", function()
   requests = {}
   jury.judge(buf)

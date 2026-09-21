@@ -7,6 +7,7 @@ local Config = require("jury.config")
 local M = {}
 
 local cache = {} -- cwd .. "\n" .. id -> { list, at }
+local pending = {} -- same key -> callbacks waiting on one running rg
 
 --- Run one scan. `spec.re` is a ripgrep regex; `spec.name` is a Lua pattern
 --- that pulls the identifier out of the matched line.
@@ -19,6 +20,11 @@ function M.scan(spec, cwd, cb)
   if hit and (os.time() - hit.at) < Config.options.candidate_ttl then
     return cb(hit.list)
   end
+  if pending[key] then
+    table.insert(pending[key], cb)
+    return
+  end
+  pending[key] = { cb }
   local args = { "rg", "--no-heading", "--line-number", "--color", "never", "-g", "!node_modules", "-g", "!dist" }
   for _, g in ipairs(spec.globs or { "*.ts", "*.tsx" }) do
     args[#args + 1] = "-g"
@@ -49,7 +55,11 @@ function M.scan(spec, cwd, cb)
       item.key = item.name .. "@" .. item.file
     end
     cache[key] = { list = list, at = os.time() }
-    cb(list)
+    local waiting = pending[key] or {}
+    pending[key] = nil
+    for _, waiter in ipairs(waiting) do
+      waiter(list)
+    end
   end)
 end
 
@@ -58,6 +68,7 @@ function M.name(key)
   return key and (key:gsub("@.*$", "")) or nil
 end
 
+-- Pending scans are left alone: a running rg still calls its waiters back.
 function M.clear()
   cache = {}
 end
