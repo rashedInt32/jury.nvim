@@ -10,8 +10,8 @@ local cache = {} -- cwd .. "\n" .. id -> { list, at }
 local pending = {} -- same key -> callbacks waiting on one running rg
 
 --- Run one scan. `spec.re` is a ripgrep regex; `spec.name` is a Lua pattern
---- that pulls the identifier out of the matched line.
----@param spec { id: string, re: string, name: string, globs?: string[] }
+--- (or a function of the matched line) that pulls the identifier out.
+---@param spec { id: string, re: string, name: string|fun(text: string): string|nil, globs?: string[] }
 ---@param cwd string
 ---@param cb fun(list: table[])
 function M.scan(spec, cwd, cb)
@@ -38,7 +38,7 @@ function M.scan(spec, cwd, cb)
     for line in (res.stdout or ""):gmatch("[^\n]+") do
       local file, lnum, text = line:match("^(.-):(%d+):(.*)$")
       if file then
-        local name = text:match(spec.name)
+        local name = type(spec.name) == "function" and spec.name(text) or text:match(spec.name)
         if name then
           local rel = file:sub(1, #cwd) == cwd and file:sub(#cwd + 2) or file
           list[#list + 1] = { name = name, file = rel, line = tonumber(lnum), text = vim.trim(text) }

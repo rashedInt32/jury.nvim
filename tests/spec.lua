@@ -61,6 +61,9 @@ write(ws .. "/app.ts", table.concat({
   "  Effect.gen(function* () { const db = yield* Database; return `user: ${yield* db.find(id)}` })",
   "Effect.runFork(Effect.forkScoped(job))",
   "export const GreeterLive: Layer.Layer<Greeter, never, never> = Layer.effect(Greeter, make)",
+  "const registry: Record<string, unknown> = {}",
+  "const fromRegistry = (k: string) => registry[k] as Effect.Effect<string, never, unknown>",
+  "export const runRegistered = Effect.runPromise(Effect.gen(function* () { return yield* fromRegistry(\"home\") }))",
 }, "\n") .. "\n")
 vim.cmd.cd(ws)
 
@@ -114,6 +117,7 @@ local diags = {
   { lnum = 5, col = 2, severity = 1, source = "effect", code = 1, message = "Missing 'NotFound' in the expected Effect errors." },
   { lnum = 6, col = 0, severity = 1, source = "typescript", code = 2769, message = NO_OVERLOAD },
   { lnum = 7, col = 13, severity = 1, source = "effect", code = 1, message = "Missing 'Logger' in the expected Layer context." },
+  { lnum = 10, col = 47, severity = 1, source = "typescript", code = 2379, message = "Argument of type 'Effect<string, never, unknown>' is not assignable to parameter of type 'Effect<string, never, never>'" .. SUFFIX },
 }
 
 local function box(i)
@@ -141,6 +145,8 @@ it("before any judgment the boxes render the generic hints", function()
   vim.diagnostic.set(ns, buf, diags)
   has(box(1), "⚡ Hint: .pipe(Effect.provide(SomeLayer))")
   has(box(3), "⚡ Hint: .pipe(Effect.catchTags({...})) or Effect.orDie")
+  has(box(7), "R Not Inferred")
+  has(box(7), "⚡ Hint: annotate the effect to find where R widened")
 end)
 
 it("one batch judges every family, dedupes the duplicate line, and steers the overload parse", function()
@@ -150,6 +156,7 @@ it("one batch judges every family, dedupes the duplicate line, and steers the ov
     fix = { choice = "declare", confidence = 0.92 },
     domain = { choice = "UserServiceError@errors.ts", confidence = 0.95 },
     overload = { choice = "2", confidence = 0.9 },
+    widened = { choice = "fromRegistry@app.ts", confidence = 0.81 },
   }
   requests = {}
   jury.judge(buf)
@@ -158,10 +165,23 @@ it("one batch judges every family, dedupes the duplicate line, and steers the ov
     return b and b:find("⚡ Jev:", 1, true) ~= nil and box(5):find("Type Mismatch", 1, true) ~= nil
   end, 20)
   eq(#requests, 1, "one request for the whole buffer")
-  -- 5 hint diagnostics collapse to 4 signatures (line 1 twice), plus the overload.
-  eq(#requests[1].state.items, 5)
+  -- 6 hint diagnostics collapse to 5 signatures (line 1 twice), plus the overload.
+  eq(#requests[1].state.items, 6)
   local qcount = vim.tbl_count(requests[1].questions)
-  eq(qcount, 2 + 2 + 2 + 1 + 1, "layer+where, fix+domain, fix+domain, overload, layer only")
+  eq(qcount, 2 + 2 + 2 + 1 + 1 + 1, "layer+where, fix+domain, fix+domain, overload, layer only, widened")
+  local wide = requests[1].state.items[6]
+  eq(wide.family, "widened")
+  eq(wide.channel, "R")
+  truthy(vim.tbl_contains(wide.suspects, "fromRegistry"), "the helper is a suspect")
+  truthy(not vim.tbl_contains(wide.suspects, "Effect"), "the Effect namespace is not a suspect")
+  local wq = requests[1].questions["d6_widened"]
+  truthy(wq and wq.criteria["fromRegistry@app.ts"], "options are the suspects' workspace definitions")
+  truthy(wq and wq.criteria["runRegistered@app.ts"])
+  truthy(wq and not wq.criteria["registry@app.ts"], "definitions the context never mentions are not offered")
+  truthy(wq and not wq.criteria["main@app.ts"])
+  has(box(7), "⚡ Jev: annotate fromRegistry (app.ts:10), where R widened")
+  has(box(7), "↳ widened fromRegistry 0.81")
+  lacks(box(7), "annotate the effect to find where")
   has(box(6), "Missing RIn")
   has(box(6), "⚡ Jev: Layer.provide(AppLive) inside this layer", "a Layer's RIn gets the layer template, no where question")
   has(box(6), "↳ layer AppLive 0.97")
